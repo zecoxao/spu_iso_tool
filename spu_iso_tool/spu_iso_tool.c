@@ -3,152 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "aes.h"
+
+#include "spucore.h"
 
 /*
- * Helper function to XOR two 16-byte blocks
- */
-static void xor_block16(unsigned char* dst, const unsigned char* src1, const unsigned char* src2) {
-    for (int i = 0; i < 16; i++) {
-        dst[i] = src1[i] ^ src2[i];
-    }
-}
-
-/**
- * Custom AES-128-CTR + CBC-MAC encryption (CCM-style for PS3 containers).
- */
-int custom_ccm_encrypt(const unsigned char* key,
-    unsigned char* header,
-    const unsigned char* plaintext,
-    unsigned char* ciphertext,
-    size_t body_len)
-{
-    aes_context ctx;
-    unsigned char chain[16];
-    unsigned char temp_block[16];
-    unsigned char ctr[16];
-    unsigned char keystream[16];
-    unsigned char s0[16];
-    unsigned char tag[16];
-
-    if (body_len % 16 != 0) {
-        return POLARSSL_ERR_AES_INVALID_INPUT_LENGTH;
-    }
-
-    size_t N = body_len / 16;
-    const unsigned char* iv12 = &header[0x04];
-
-    int ret = aes_setkey_enc(&ctx, key, 128);
-    if (ret != 0) return ret;
-
-    /* STAGE 1: Compute CBC-MAC over the first 3 blocks of the header */
-    memset(chain, 0, 16);
-    for (int j = 0; j < 3; j++) {
-        xor_block16(temp_block, &header[16 * j], chain);
-        aes_crypt_ecb(&ctx, AES_ENCRYPT, temp_block, chain);
-    }
-
-    /* STAGE 2: CBC-MAC over plaintext + AES-CTR encryption */
-    memcpy(ctr + 4, iv12, 12);
-
-    for (size_t i = 0; i < N; i++) {
-        const unsigned char* pt_ptr = &plaintext[16 * i];
-        unsigned char* ct_ptr = &ciphertext[16 * i];
-
-        xor_block16(temp_block, pt_ptr, chain);
-        aes_crypt_ecb(&ctx, AES_ENCRYPT, temp_block, chain);
-
-        unsigned int c = (unsigned int)(N - i);
-        ctr[0] = (unsigned char)((c >> 24) & 0xFF);
-        ctr[1] = (unsigned char)((c >> 16) & 0xFF);
-        ctr[2] = (unsigned char)((c >> 8) & 0xFF);
-        ctr[3] = (unsigned char)(c & 0xFF);
-
-        aes_crypt_ecb(&ctx, AES_ENCRYPT, ctr, keystream);
-        xor_block16(ct_ptr, pt_ptr, keystream);
-    }
-
-    /* STAGE 3: Final tag masking (S0) and header update */
-    memset(ctr, 0, 4);
-    memcpy(ctr + 4, iv12, 12);
-    aes_crypt_ecb(&ctx, AES_ENCRYPT, ctr, s0);
-
-    xor_block16(tag, chain, s0);
-    memcpy(&header[0x30], tag, 16);
-
-    return 0;
-}
-
-/**
- * Custom AES-128-CTR + CBC-MAC decryption (CCM-style for PS3 containers).
- */
-int custom_ccm_decrypt(const unsigned char* key,
-    const unsigned char* header,
-    const unsigned char* ciphertext,
-    unsigned char* plaintext,
-    size_t body_len)
-{
-    aes_context ctx;
-    unsigned char chain[16];
-    unsigned char temp_block[16];
-    unsigned char ctr[16];
-    unsigned char keystream[16];
-    unsigned char s0[16];
-    unsigned char computed_tag[16];
-
-    if (body_len % 16 != 0) {
-        return POLARSSL_ERR_AES_INVALID_INPUT_LENGTH;
-    }
-
-    size_t N = body_len / 16;
-    const unsigned char* iv12 = &header[0x04];
-
-    int ret = aes_setkey_enc(&ctx, key, 128);
-    if (ret != 0) return ret;
-
-    /* STAGE 1: Compute CBC-MAC over the first 3 blocks of the header */
-    memset(chain, 0, 16);
-    for (int j = 0; j < 3; j++) {
-        xor_block16(temp_block, &header[16 * j], chain);
-        aes_crypt_ecb(&ctx, AES_ENCRYPT, temp_block, chain);
-    }
-
-    /* STAGE 2: AES-CTR decryption + CBC-MAC update over recovered plaintext */
-    memcpy(ctr + 4, iv12, 12);
-
-    for (size_t i = 0; i < N; i++) {
-        unsigned char* pt_ptr = &plaintext[16 * i];
-        const unsigned char* ct_ptr = &ciphertext[16 * i];
-
-        unsigned int c = (unsigned int)(N - i);
-        ctr[0] = (unsigned char)((c >> 24) & 0xFF);
-        ctr[1] = (unsigned char)((c >> 16) & 0xFF);
-        ctr[2] = (unsigned char)((c >> 8) & 0xFF);
-        ctr[3] = (unsigned char)(c & 0xFF);
-
-        aes_crypt_ecb(&ctx, AES_ENCRYPT, ctr, keystream);
-        xor_block16(pt_ptr, ct_ptr, keystream);
-
-        xor_block16(temp_block, pt_ptr, chain);
-        aes_crypt_ecb(&ctx, AES_ENCRYPT, temp_block, chain);
-    }
-
-    /* STAGE 3: Compute final tag mask (S0) and validate the tag */
-    memset(ctr, 0, 4);
-    memcpy(ctr + 4, iv12, 12);
-    aes_crypt_ecb(&ctx, AES_ENCRYPT, ctr, s0);
-
-    xor_block16(computed_tag, chain, s0);
-
-    if (memcmp(computed_tag, &header[0x30], 16) != 0) {
-        return -1; /* MAC FAIL */
-    }
-
-    return 0; /* MAC PASS */
-}
-
-/*
- * Helper function to parse hex string into byte array
+ * Parse a hex string into a byte array. Returns the number of bytes on
+ * success, or -1 on malformed input / overflow.
  */
 static int hex_to_bytes(const char* hex_str, unsigned char* byte_arr, size_t max_len) {
     size_t len = strlen(hex_str);
@@ -162,15 +22,38 @@ static int hex_to_bytes(const char* hex_str, unsigned char* byte_arr, size_t max
     return (int)(len / 2);
 }
 
-/*
- * Helper to print hex arrays for debug/logging
- */
+/* Print a labelled hex dump for debug/logging. */
 static void print_hex(const char* label, const unsigned char* data, size_t len) {
     printf("%s: ", label);
     for (size_t i = 0; i < len; i++) {
         printf("%02x", data[i]);
     }
     printf("\n");
+}
+
+/* Read an entire file into a malloc'd buffer. Returns 0 on success. */
+static int read_file(const char* path, unsigned char** out, size_t* out_len) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); return -1; }
+    unsigned char* buf = (unsigned char*)malloc((size_t)sz ? (size_t)sz : 1);
+    if (!buf) { fclose(f); return -1; }
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    *out = buf;
+    *out_len = rd;
+    return 0;
+}
+
+static int write_file(const char* path, const unsigned char* data, size_t len) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return -1;
+    fwrite(data, 1, len, f);
+    fclose(f);
+    return 0;
 }
 
 int main(int argc, char** argv) {
@@ -183,7 +66,6 @@ int main(int argc, char** argv) {
 
     char* mode = argv[1];
 
-    // Сразу жестко валидируем режим, чтобы программа не вела себя непредсказуемо
     if (strcmp(mode, "enc") != 0 && strcmp(mode, "dec") != 0) {
         fprintf(stderr, "Error: Invalid mode '%s'. Must be either 'enc' or 'dec'.\n", mode);
         return 1;
@@ -232,147 +114,83 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    FILE* fin = fopen(infile_path, "rb");
-    if (!fin) {
+    unsigned char* indata = NULL;
+    size_t inlen = 0;
+    if (read_file(infile_path, &indata, &inlen) != 0) {
         fprintf(stderr, "Error: Cannot open input file %s\n", infile_path);
         return 1;
     }
 
-    fseek(fin, 0, SEEK_END);
-    long file_size = ftell(fin);
-    fseek(fin, 0, SEEK_SET);
-
     if (strcmp(mode, "enc") == 0) {
         if (!has_iv || !has_nonce || !has_ekey) {
             fprintf(stderr, "Error: Encryption requires --iv, --nonce, and --ekey.\n");
-            fclose(fin);
+            free(indata);
             return 1;
         }
 
-        size_t plaintext_len = (size_t)file_size;
-        size_t padded_len = (plaintext_len + 15) & ~15;
-        size_t N = padded_len / 16;
-
-        unsigned char* plaintext = (unsigned char*)calloc(1, padded_len);
-        unsigned char* ciphertext = (unsigned char*)malloc(padded_len);
-        unsigned char header[64] = { 0 };
-
-        if (!plaintext || !ciphertext) {
-            fprintf(stderr, "Error: Memory allocation failed.\n");
-            fclose(fin);
-            free(plaintext); free(ciphertext);
-            return 1;
-        }
-
-        size_t read_bytes = fread(plaintext, 1, plaintext_len, fin);
-        (void)read_bytes;
-        fclose(fin);
-
-        header[0x00] = (unsigned char)((N >> 24) & 0xFF);
-        header[0x01] = (unsigned char)((N >> 16) & 0xFF);
-        header[0x02] = (unsigned char)((N >> 8) & 0xFF);
-        header[0x03] = (unsigned char)(N & 0xFF);
-
-        memcpy(&header[0x04], iv, 12);
-
-        header[0x10] = header[0x00];
-        header[0x11] = header[0x01];
-        header[0x12] = header[0x02];
-        header[0x13] = header[0x03];
-
-        memcpy(&header[0x14], console_nonce, 12);
-        memcpy(&header[0x20], ekey, 16);
+        unsigned char* container = NULL;
+        size_t container_len = 0;
 
         printf("--- Executing Custom CCM Encryption ---\n");
         print_hex("Master Key   ", key, 16);
         print_hex("CTR IV       ", iv, 12);
         print_hex("Console Nonce", console_nonce, 12);
         print_hex("Scramble EKey", ekey, 16);
-        printf("Body Blocks  : %zu (%zu bytes)\n", N, padded_len);
+        printf("Input bytes  : %zu\n", inlen);
 
-        int enc_res = custom_ccm_encrypt(key, header, plaintext, ciphertext, padded_len);
-        if (enc_res != 0) {
-            fprintf(stderr, "Crypto engine error during encryption.\n");
-            free(plaintext); free(ciphertext);
+        int rc = spu_encrypt_buffer(key, iv, console_nonce, ekey, indata, inlen,
+                                    &container, &container_len);
+        free(indata);
+        if (rc != SPU_OK) {
+            fprintf(stderr, "Crypto engine error during encryption (%d).\n", rc);
             return 1;
         }
 
-        FILE* fout = fopen(outfile_path, "wb");
-        if (!fout) {
+        if (write_file(outfile_path, container, container_len) != 0) {
             fprintf(stderr, "Error: Cannot open output file %s\n", outfile_path);
-            free(plaintext); free(ciphertext);
+            free(container);
             return 1;
         }
-        fwrite(header, 1, 64, fout);
-        fwrite(ciphertext, 1, padded_len, fout);
-        fclose(fout);
 
         printf("Encryption Successful! Container saved to %s\n", outfile_path);
-        print_hex("Generated MAC", &header[0x30], 16);
-
-        free(plaintext);
-        free(ciphertext);
+        print_hex("Generated MAC", &container[0x30], 16);
+        free(container);
     }
-    else if (strcmp(mode, "dec") == 0) {
-        if (file_size < 64) {
-            fprintf(stderr, "Error: File too small to contain a valid header.\n");
-            fclose(fin);
-            return 1;
+    else { /* dec */
+        unsigned char* header = indata;
+        if (inlen >= 64) {
+            printf("--- Executing Custom CCM Decryption ---\n");
+            print_hex("Master Key   ", key, 16);
+            print_hex("Extracted IV ", &header[0x04], 12);
+            print_hex("Extracted Nonce", &header[0x14], 12);
+            print_hex("Extracted EKey", &header[0x20], 16);
+            print_hex("Expected MAC ", &header[0x30], 16);
         }
-        unsigned char header[64];
-        size_t read_bytes = fread(header, 1, 64, fin);
-        (void)read_bytes;
-        unsigned int N = ((unsigned int)header[0x10] << 24) |
-            ((unsigned int)header[0x11] << 16) |
-            ((unsigned int)header[0x12] << 8) |
-            ((unsigned int)header[0x13]);
-        size_t body_len = N * 16;
-        if (file_size < (long)(64 + body_len)) {
-            fprintf(stderr, "Warning: File size mismatch. Clamping body length.\n");
-            body_len = ((size_t)file_size - 64) & ~15;
-        }
-        unsigned char* ciphertext = (unsigned char*)malloc(body_len);
-        unsigned char* plaintext = (unsigned char*)malloc(body_len);
-        if (!ciphertext || !plaintext) {
-            fprintf(stderr, "Error: Memory allocation failed.\n");
-            fclose(fin);
-            free(ciphertext); free(plaintext);
-            return 1;
-        }
-        read_bytes = fread(ciphertext, 1, body_len, fin);
-        (void)read_bytes;
-        fclose(fin);
-        printf("--- Executing Custom CCM Decryption ---\n");
-        print_hex("Master Key   ", key, 16);
-        print_hex("Extracted IV ", &header[0x04], 12);
-        print_hex("Extracted Nonce", &header[0x14], 12);
-        print_hex("Extracted EKey", &header[0x20], 16);
-        print_hex("Expected MAC ", &header[0x30], 16);
-        int dec_res = custom_ccm_decrypt(key, header, ciphertext, plaintext, body_len);
-        if (dec_res == 0) {
+
+        unsigned char* plain = NULL;
+        size_t plain_len = 0;
+        int rc = spu_decrypt_buffer(key, indata, inlen, &plain, &plain_len);
+        free(indata);
+
+        if (rc == SPU_OK) {
             printf("\n[+] MAC PASS: Authentic data container verified!\n");
-            FILE* fout = fopen(outfile_path, "wb");
-            if (!fout) {
+            if (write_file(outfile_path, plain, plain_len) != 0) {
                 fprintf(stderr, "Error: Cannot open output file %s\n", outfile_path);
-                free(ciphertext); free(plaintext);
+                free(plain);
                 return 1;
             }
-            fwrite(plaintext, 1, body_len, fout);
-            fclose(fout);
             printf("Decrypted payload saved safely to %s\n", outfile_path);
+            free(plain);
+        }
+        else if (rc == SPU_ERR_TOO_SMALL) {
+            fprintf(stderr, "Error: File too small to contain a valid header.\n");
+            return 1;
         }
         else {
             fprintf(stderr, "\n[-] MAC FAIL: Verification failed. Wrong key or container corrupted.\n");
-            free(ciphertext); free(plaintext);
             return 3;
         }
-        free(ciphertext);
-        free(plaintext);
     }
-    else {
-        fprintf(stderr, "Error: Unknown execution mode '%s'. Use 'enc' or 'dec'.\n", mode);
-        fclose(fin);
-        return 1;
-    }
+
     return 0;
 }

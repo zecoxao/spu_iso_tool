@@ -21,9 +21,15 @@
     <ClCompile Include="aes.c">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="spucore.c">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="aes.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="spucore.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
   </ItemGroup>

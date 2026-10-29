@@ -10,8 +10,11 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build ${{ matrix.name }}
+  # ---------------------------------------------------------------------------
+  # Command-line tool (no Qt needed) for all three platforms.
+  # ---------------------------------------------------------------------------
+  build-cli:
+    name: CLI ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -33,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DSPU_BUILD_GUI=OFF
 
       - name: Build
         run: cmake --build build --config Release
@@ -42,15 +45,103 @@ jobs:
         shell: bash
         run: cp "${{ matrix.bin }}" "${{ matrix.artifact }}"
 
-      - name: Upload build artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
+  # ---------------------------------------------------------------------------
+  # Qt GUI (self-contained packages) for all three platforms.
+  # A failure on one platform does not block the others or the CLI binaries.
+  # ---------------------------------------------------------------------------
+  build-gui:
+    name: GUI ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: ubuntu-latest
+            name: linux-x64
+          - os: macos-latest
+            name: macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.3'
+          cache: true
+
+      - name: Install Linux deploy tooling
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev fuse libfuse2
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DSPU_BUILD_GUI=ON
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      # --- Windows: windeployqt + zip ---------------------------------------
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/gui/Release/spu_iso_gui.exe dist/
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw dist/spu_iso_gui.exe
+          Compress-Archive -Path dist/* -DestinationPath spu_iso_gui-windows-x64.zip
+
+      # --- macOS: macdeployqt + zip the .app --------------------------------
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          APP=build/gui/spu_iso_gui.app
+          macdeployqt "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" spu_iso_gui-macos-universal.zip
+
+      # --- Linux: AppImage ---------------------------------------------------
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          export QMAKE="$(command -v qmake6 || command -v qmake)"
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable build/gui/spu_iso_gui \
+            --desktop-file gui/spu_iso_gui.desktop \
+            --icon-file gui/spu_iso_gui.png \
+            --plugin qt \
+            --output appimage
+          mv spu_iso_tool*.AppImage spu_iso_gui-linux-x86_64.AppImage
+
+      - name: Upload GUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-${{ matrix.name }}
+          path: |
+            spu_iso_gui-*.zip
+            spu_iso_gui-*.AppImage
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Collect everything that built and publish the release.
+  # ---------------------------------------------------------------------------
   release:
     name: Publish release
-    needs: build
+    needs: [build-cli, build-gui]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

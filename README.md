@@ -5,7 +5,24 @@ Decrypt and encrypt `lv0ldr` / `metldr` style PS3 SPU isolation containers — a
 It implements a custom AES-128 **CCM-style** scheme (AES-CTR for the body plus a CBC-MAC
 authentication tag), matching the layout used by these containers.
 
-## Usage
+It ships as both a **command-line tool** (`spu_iso_tool`) and a **Qt GUI** (`spu_iso_gui`).
+
+## GUI
+
+The Qt GUI exposes a panel for **metldr** and a panel for **lv0ldr**, each with its own
+input/output files and keys. Enable one or both — when both are enabled they are processed in a
+single run. Pick **Decrypt** (needs only the master key) or **Encrypt** (also shows the IV, nonce
+and ekey fields) at the top; results and any errors are shown in the log at the bottom.
+
+Prebuilt GUI packages are attached to each [release](https://github.com/zecoxao/spu_iso_tool/releases):
+
+| Platform | Asset                              |
+|----------|------------------------------------|
+| Windows  | `spu_iso_gui-windows-x64.zip`      |
+| macOS    | `spu_iso_gui-macos-universal.zip`  |
+| Linux    | `spu_iso_gui-linux-x86_64.AppImage`|
+
+## Command-line usage
 
 ```
 Encrypt: spu_iso_tool enc --key <hex> --iv <hex> --nonce <hex> --ekey <hex> <infile> <outfile>
@@ -62,16 +79,25 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-The binary is produced as `build/spu_iso_tool` (`build/Release/spu_iso_tool.exe` on Windows).
+The CLI binary is produced as `build/spu_iso_tool` (`build/Release/spu_iso_tool.exe` on Windows).
+
+The **Qt GUI** is built automatically when Qt 6 (Widgets) is found. Control it explicitly with
+`-DSPU_BUILD_GUI=ON` (require Qt), `-DSPU_BUILD_GUI=OFF` (CLI only), or the default `AUTO`:
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DSPU_BUILD_GUI=ON -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x/<kit>
+cmake --build build --config Release
+```
 
 ### Visual Studio
 
-Open `spu_iso_tool.sln` and build the **Release | x64** configuration.
+Open `spu_iso_tool.sln` and build the **Release | x64** configuration (CLI only).
 
 ## Downloads
 
 Prebuilt binaries for Windows, macOS and Linux are attached to each
-[release](https://github.com/zecoxao/spu_iso_tool/releases).
+[release](https://github.com/zecoxao/spu_iso_tool/releases): the `spu_iso_tool-*` CLI binaries and
+the `spu_iso_gui-*` GUI packages.
 
 ## Credits
 

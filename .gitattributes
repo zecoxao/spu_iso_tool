@@ -1,0 +1,6 @@
+# Normalize line endings; keep Unix-consumed files as LF.
+* text=auto
+*.desktop text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+*.png binary

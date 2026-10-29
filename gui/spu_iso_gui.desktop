@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=spu_iso_tool
+GenericName=SPU ISO Tool
+Comment=Decrypt and encrypt lv0ldr / metldr PS3 SPU isolation containers
+Exec=spu_iso_gui
+Icon=spu_iso_gui
+Categories=Utility;
+Terminal=false

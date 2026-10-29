@@ -124,10 +124,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="aes.c" />
+    <ClCompile Include="spucore.c" />
     <ClCompile Include="spu_iso_tool.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="aes.h" />
+    <ClInclude Include="spucore.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
