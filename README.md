@@ -73,6 +73,10 @@ Open `spu_iso_tool.sln` and build the **Release | x64** configuration.
 Prebuilt binaries for Windows, macOS and Linux are attached to each
 [release](https://github.com/zecoxao/spu_iso_tool/releases).
 
+## Credits
+
+Proudly created by ZeroTolerance, ported by Zecoxao.
+
 ## License
 
 GPL-2.0-or-later. The bundled AES implementation (`aes.c` / `aes.h`) is from
